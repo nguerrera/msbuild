@@ -1489,12 +1489,16 @@ Copyright (C) Microsoft Corporation. All rights reserved.
       <_MSBuildProjectReference Include="@(ProjectReferenceWithConfiguration)" Condition="'$(BuildingInsideVisualStudio)'!='true' and '@(ProjectReferenceWithConfiguration)'!=''"/>
     </ItemGroup>
 
-    <!-- Break the project list into two lists: those that exist on disk and those that don't. -->
+    <!--
+       Break the project list into two lists: those that exist on disk and those that don't. 
+
+       Use full path for identity of existent group so that we can easily correlate it to results of MSBuild calls over it
+       Leave identity unchanged for non-existent group to keep error messages concise.
+    -->
     <ItemGroup>
-      <_MSBuildProjectReferenceExistent Include="@(_MSBuildProjectReference)" Condition="Exists('%(Identity)')"/>
+      <_MSBuildProjectReferenceExistent Include="@(_MSBuildProjectReference->'%(FullPath)')" Condition="Exists('%(Identity)')"/>
       <_MSBuildProjectReferenceNonexistent Include="@(_MSBuildProjectReference)" Condition="!Exists('%(Identity)')"/>
     </ItemGroup>
-
   </Target>
 
   <!--
@@ -1555,7 +1559,7 @@ Copyright (C) Microsoft Corporation. All rights reserved.
     </PropertyGroup>
 
     <MSBuild
-        Projects="%(_MSBuildProjectReferenceExistent.Identity)"
+        Projects="@(_MSBuildProjectReferenceExistent)"
         Targets="GetTargetFrameworkProperties"
         BuildInParallel="$(BuildInParallel)"
         Properties="%(_MSBuildProjectReferenceExistent.SetConfiguration); %(_MSBuildProjectReferenceExistent.SetPlatform); ReferringTargetFramework=$(ReferringTargetFrameworkForProjectReferences)"
@@ -1563,30 +1567,14 @@ Copyright (C) Microsoft Corporation. All rights reserved.
         RemoveProperties="%(_MSBuildProjectReferenceExistent.GlobalPropertiesToRemove);TargetFramework;RuntimeIdentifier"
         Condition="'%(_MSBuildProjectReferenceExistent.SkipGetTargetFrameworkProperties)' != 'true'">
 
-      <Output TaskParameter="TargetOutputs" PropertyName="_ProjectReferenceTargetFrameworkProperties" />
+      <Output TaskParameter="TargetOutputs" ItemName="_ProjectReferenceTargetFrameworkProperties" />
     </MSBuild>
 
-    <ItemGroup>
-      <_MSBuildProjectReferenceExistent Condition="'%(_MSBuildProjectReferenceExistent.Identity)' == '%(Identity)' and '$(_ProjectReferenceTargetFrameworkProperties)' != ''">
-        <SetTargetFramework>$(_ProjectReferenceTargetFrameworkProperties)</SetTargetFramework>
-
-        <UndefineProperties Condition="$(_ProjectReferenceTargetFrameworkProperties.Contains(`ProjectHasSingleTargetFramework=true`))">%(_MSBuildProjectReferenceExistent.UndefineProperties);TargetFramework;ProjectHasSingleTargetFramework</UndefineProperties>
-        <!-- Unconditionally remove the property that was set as a marker to indicate that for this call we should remove TargetFramework -->
-        <UndefineProperties Condition="!$(_ProjectReferenceTargetFrameworkProperties.Contains(`ProjectHasSingleTargetFramework=true`))">%(_MSBuildProjectReferenceExistent.UndefineProperties);ProjectHasSingleTargetFramework</UndefineProperties>
-      </_MSBuildProjectReferenceExistent>
-    </ItemGroup>
-
-    <ItemGroup>
-      <_MSBuildProjectReferenceExistent Condition="'%(_MSBuildProjectReferenceExistent.Identity)' == '%(Identity)' and '$(_ProjectReferenceTargetFrameworkProperties)' != ''">
-        <UndefineProperties Condition="$(_ProjectReferenceTargetFrameworkProperties.Contains(`ProjectIsRidAgnostic=true`))">%(_MSBuildProjectReferenceExistent.UndefineProperties);RuntimeIdentifier;ProjectIsRidAgnostic</UndefineProperties>
-        <!-- Unconditionally remove the property that was set as a marker to indicate that for this call we should remove RuntimeIdentifier -->
-        <UndefineProperties Condition="!$(_ProjectReferenceTargetFrameworkProperties.Contains(`ProjectIsRidAgnostic=true`))">%(_MSBuildProjectReferenceExistent.UndefineProperties);ProjectIsRidAgnostic</UndefineProperties>
-      </_MSBuildProjectReferenceExistent>
-    </ItemGroup>
-
-    <PropertyGroup>
-      <_ProjectReferenceTargetFrameworkProperties />
-    </PropertyGroup>
+     <ItemGroup>
+       <_MSBuildProjectReferenceExistent Condition="'%(MSBuildSourceProjectFile)' != '' and '@(_MSBuildProjectReferenceExistent->'%(FullPath)')' == '@(_ProjectReferenceTargetFrameworkProperties->'%(MSBuildSourceProjectFile)')'">
+         <SetTargetFramework>@(_ProjectReferenceTargetFrameworkConfiguration->'%(Identity)')</SetTargetFramework>
+       </_MSBuildProjectReferenceExistent>
+     </ItemGroup>
   </Target>
 
   <!--
@@ -1655,7 +1643,7 @@ Copyright (C) Microsoft Corporation. All rights reserved.
 
   <Target
       Name="ResolveProjectReferences"
-      DependsOnTargets="PrepareProjectReferences"
+      DependsOnTargets="AssignProjectConfiguration;_SplitProjectReferencesByFileExistence"
       Returns="@(_ResolvedNativeProjectReferencePaths);@(_ResolvedProjectReferencePaths)">
 
     <!--
@@ -1670,35 +1658,37 @@ Copyright (C) Microsoft Corporation. All rights reserved.
         Projects="@(_MSBuildProjectReferenceExistent)"
         Targets="GetTargetPath"
         BuildInParallel="$(BuildInParallel)"
-        Properties="%(_MSBuildProjectReferenceExistent.SetConfiguration); %(_MSBuildProjectReferenceExistent.SetPlatform); %(_MSBuildProjectReferenceExistent.SetTargetFramework)"
-        Condition="'%(_MSBuildProjectReferenceExistent.BuildReference)' == 'true' and '@(ProjectReferenceWithConfiguration)' != '' and ('$(BuildingInsideVisualStudio)' == 'true' or '$(BuildProjectReferences)' != 'true') and '$(VisualStudioVersion)' != '10.0' and '@(_MSBuildProjectReferenceExistent)' != ''"
+        Properties="%(_MSBuildProjectReferenceExistent.SetConfiguration); %(_MSBuildProjectReferenceExistent.SetPlatform)"
+        Condition="'%(_MSBuildProjectReferenceExistent.BuildReference)' == 'true' and '@(ProjectReferenceWithConfiguration)' != '' and ('$(BuildingInsideVisualStudio)' == 'true' or '$(BuildProjectReferences)' != 'true') and '@(_MSBuildProjectReferenceExistent)' != '' and '@(_MSBuildProjectReferenceExistent.OutputType)' == ''"
         ContinueOnError="!$(BuildingProject)"
         RemoveProperties="%(_MSBuildProjectReferenceExistent.GlobalPropertiesToRemove)">
 
       <Output TaskParameter="TargetOutputs" ItemName="_ResolvedProjectReferencePaths" Condition="'%(_MSBuildProjectReferenceExistent.ReferenceOutputAssembly)'=='true'"/>
-      <Output TaskParameter="TargetOutputs" ItemName="%(_MSBuildProjectReferenceExistent.OutputItemType)" Condition="'%(_MSBuildProjectReferenceExistent.OutputItemType)' != ''"/>
 
     </MSBuild>
 
-    <!--
-        QUIRKING FOR DEV10
+    <ItemGroup>
+      <_MSBuildProjectReferenceRequiringGetTargetFrameworkProperties 
+          Include="@(_ResolvedProjectReferencePaths->'%(MSBuildSourceProjectFile)'"
+          Condition="'%(GetTargetFrameworkPropertiesRequired)' == 'true'" />
 
-        In the 4.0 version of the targets, we built the targets specified in the Targets metadata in addition to
-        GetTargetPath when building in the IDE.  In 4.5, we changed this to just GetTargetPath because it was
-        causing performance trouble with certain systems that specified targets that did a significant amount of
-        work in the Targets metadata, expecting them to only build when doing a real build.
+      <_ResolvedProjectReferencePaths Remove="@(_MSBuildProjectReferenceRequiringGetTargetFrameworkProperties)" />
 
-        However, that change broke C++ unit testing in Dev10 + 4.5 scenarios, because they required use of the
-        Targets metadata in order to get design time builds to work properly.  Thus, we need to make sure we
-        restore the Dev10 behavior when building on Dev10.
-        -->
+      <_MSBuildProjectReferenceExistent Update="@(_ResolvedProjectReferencePaths->'%(MSBuildSourceProjectFile)')">
+        <SkipGetTargetFrameworkProperties>true</SkipGetTargetFrameworkProperties>
+      </_MSBuildProjectReferenceExistent>
+    </ItemGroup>
+
+     <CallTarget 
+         Targets="_GetTargetFrameworkProperties" 
+         Condition="@(_ResolvedProjectReferencePaths->Count()) != @(_MSBuildProjectReferenceExistent->Count())" />
 
     <MSBuild
         Projects="@(_MSBuildProjectReferenceExistent)"
-        Targets="%(_MSBuildProjectReferenceExistent.Targets);GetTargetPath"
+        Targets="GetTargetPath"
         BuildInParallel="$(BuildInParallel)"
         Properties="%(_MSBuildProjectReferenceExistent.SetConfiguration); %(_MSBuildProjectReferenceExistent.SetPlatform); %(_MSBuildProjectReferenceExistent.SetTargetFramework)"
-        Condition="'%(_MSBuildProjectReferenceExistent.BuildReference)' == 'true' and '@(ProjectReferenceWithConfiguration)' != '' and ('$(BuildingInsideVisualStudio)' == 'true' or '$(BuildProjectReferences)' != 'true') and '$(VisualStudioVersion)' == '10.0' and '@(_MSBuildProjectReferenceExistent)' != ''"
+        Condition="'%(_MSBuildProjectReferenceExistent.BuildReference)' == 'true' and '@(ProjectReferenceWithConfiguration)' != '' and ('$(BuildingInsideVisualStudio)' == 'true' or '$(BuildProjectReferences)' != 'true') and '@(_MSBuildProjectReferenceExistent)' != '' and '@(_MSBuildProjectReferenceExistent.OutputType)' == ''"
         ContinueOnError="!$(BuildingProject)"
         RemoveProperties="%(_MSBuildProjectReferenceExistent.GlobalPropertiesToRemove)">
 
